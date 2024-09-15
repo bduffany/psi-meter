@@ -16,7 +16,9 @@ import (
 )
 
 var (
-	interval = flag.Duration("interval", 100*time.Millisecond, "Poll interval")
+	interval      = flag.Duration("interval", 100*time.Millisecond, "Poll interval")
+	chart         = flag.Bool("chart", false, "Show charts")
+	chartDuration = flag.Duration("chart_duration", 1*time.Minute, "Timeseries chart duration")
 )
 
 var leftBarChars = []string{
@@ -141,18 +143,15 @@ type measurement struct {
 
 type TimePoint = tslc.TimePoint
 
-func drawCharts(paths []string, history map[string][]TimePoint) {
+func drawChart(points []TimePoint) {
 	width := termWidth()
 	height := 10
-	for _, p := range paths {
-		chart := tslc.New(width, height, tslc.WithYRange(0, 100))
-		for _, tp := range history[p] {
-			chart.PushDataSet(p, tp)
-		}
-		chart.DrawBrailleAll()
-		fmt.Println(p)
-		fmt.Println(chart.Canvas.View())
+	chart := tslc.New(width, height, tslc.WithYRange(0, 100), tslc.WithXYSteps(0, 1))
+	for _, tp := range points {
+		chart.Push(tp)
 	}
+	chart.DrawBraille()
+	fmt.Println(chart.Canvas.View())
 }
 
 func run() error {
@@ -208,23 +207,25 @@ func run() error {
 				acc := time.Duration(psis[p].SomeTotal-last.psis[p].SomeTotal) * time.Microsecond
 				pct := float64(acc) / float64(dur) * 100
 				printMeter(p, pct, 100)
-				history[p] = append(history[p], TimePoint{Time: t, Value: pct})
-				const limit = 1024
-				if len(history[p]) > limit {
-					history[p] = history[p][1:]
+				if *chart {
+					history[p] = append(history[p], TimePoint{Time: t, Value: pct})
+					const limit = 2048
+					for len(history[p]) > 0 && (len(history[p]) > limit || history[p][0].Time.Before(t.Add(-*chartDuration))) {
+						history[p] = history[p][1:]
+					}
+					drawChart(history[p])
 				}
+				fmt.Println()
 			}
 		}
 		last = &measurement{t, psis}
-		if len(history) > 0 {
-			drawCharts(paths, history)
-		}
 	}
 
 	return nil
 }
 
 func main() {
+	flag.Parse()
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
